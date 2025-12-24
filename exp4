@@ -1,0 +1,353 @@
+#include <iostream>
+#include <vector>
+#include <ctime>
+#include <cstdlib>
+#include <algorithm>
+#include <iomanip>
+#include <cmath>
+#include <string>
+using namespace std;
+
+// 边界框结构体（包含位置、置信度、保留标记）
+struct BoundingBox {
+    float x1;       // 左上角x坐标
+    float y1;       // 左上角y坐标
+    float x2;       // 右下角x坐标
+    float y2;       // 右下角y坐标
+    float score;    // 置信度（0~1）
+    bool isKeep;    // NMS中是否保留该框
+
+    // 默认构造函数
+    BoundingBox() : x1(0), y1(0), x2(0), y2(0), score(0), isKeep(true) {}
+    // 带参数构造函数
+    BoundingBox(float x1, float y1, float x2, float y2, float s) 
+        : x1(x1), y1(y1), x2(x2), y2(y2), score(s), isKeep(true) {}
+};
+
+// -------------------------- 一、四种排序算法实现（按置信度降序） --------------------------
+// 1. 快速排序（分治思想，原地排序）
+void quickSort(vector<BoundingBox>& arr, int left, int right) {
+    if (left >= right) return; // 递归终止条件：子数组长度≤1
+    
+    // 选择中间元素作为基准（优化：避免已排序数据的最坏情况）
+    int pivotIdx = left + (right - left) / 2;
+    swap(arr[pivotIdx], arr[right]); // 基准移至数组末尾
+    float pivotScore = arr[right].score;
+    int i = left - 1; // 小于基准区域的边界指针
+
+    // 分区过程：将小于等于基准的元素移到左侧
+    for (int j = left; j < right; j++) {
+        if (arr[j].score >= pivotScore) { // 降序排序（置信度高的在前）
+            i++;
+            swap(arr[i], arr[j]);
+        }
+    }
+    swap(arr[i + 1], arr[right]); // 基准归位到最终位置
+
+    // 递归排序左右子数组（基准位置无需再排序）
+    quickSort(arr, left, i);
+    quickSort(arr, i + 2, right);
+}
+
+// 快速排序适配接口（统一函数签名，便于批量调用）
+void quickSortAdapter(vector<BoundingBox>& arr) {
+    if (!arr.empty()) {
+        quickSort(arr, 0, arr.size() - 1);
+    }
+}
+
+// 2. 归并排序（分治思想，稳定排序）
+// 合并两个有序子数组（[left, mid] 和 [mid+1, right]）
+void merge(vector<BoundingBox>& arr, int left, int mid, int right) {
+    int n1 = mid - left + 1; // 左子数组长度
+    int n2 = right - mid;    // 右子数组长度
+
+    // 临时数组存储左右子数组（避免原数组被覆盖）
+    vector<BoundingBox> leftArr(n1), rightArr(n2);
+    for (int i = 0; i < n1; i++) leftArr[i] = arr[left + i];
+    for (int j = 0; j < n2; j++) rightArr[j] = arr[mid + 1 + j];
+
+    // 合并临时数组到原数组（降序）
+    int i = 0, j = 0, k = left;
+    while (i < n1 && j < n2) {
+        if (leftArr[i].score >= rightArr[j].score) {
+            arr[k++] = leftArr[i++];
+        } else {
+            arr[k++] = rightArr[j++];
+        }
+    }
+
+    // 处理剩余元素（左子数组未合并完）
+    while (i < n1) arr[k++] = leftArr[i++];
+    // 处理剩余元素（右子数组未合并完）
+    while (j < n2) arr[k++] = rightArr[j++];
+}
+
+// 归并排序递归逻辑
+void mergeSortRecur(vector<BoundingBox>& arr, int left, int right) {
+    if (left >= right) return; // 递归终止条件
+    
+    int mid = left + (right - left) / 2; // 避免溢出（替代 (left+right)/2）
+    mergeSortRecur(arr, left, mid);      // 排序左子数组
+    mergeSortRecur(arr, mid + 1, right); // 排序右子数组
+    merge(arr, left, mid, right);        // 合并两个有序子数组
+}
+
+// 归并排序适配接口
+void mergeSortAdapter(vector<BoundingBox>& arr) {
+    if (!arr.empty()) {
+        mergeSortRecur(arr, 0, arr.size() - 1);
+    }
+}
+
+// 3. 堆排序（基于最大堆，原地排序）
+// 堆化操作（维护最大堆性质：父节点≥子节点）
+void heapify(vector<BoundingBox>& arr, int heapSize, int parentIdx) {
+    int largestIdx = parentIdx;       // 初始化最大值为父节点
+    int leftChildIdx = 2 * parentIdx + 1;  // 左子节点索引
+    int rightChildIdx = 2 * parentIdx + 2; // 右子节点索引
+
+    // 若左子节点置信度更大，更新最大值索引
+    if (leftChildIdx < heapSize && arr[leftChildIdx].score > arr[largestIdx].score) {
+        largestIdx = leftChildIdx;
+    }
+    // 若右子节点置信度更大，更新最大值索引
+    if (rightChildIdx < heapSize && arr[rightChildIdx].score > arr[largestIdx].score) {
+        largestIdx = rightChildIdx;
+    }
+
+    // 若最大值不是父节点，交换并递归堆化子树
+    if (largestIdx != parentIdx) {
+        swap(arr[parentIdx], arr[largestIdx]);
+        heapify(arr, heapSize, largestIdx);
+    }
+}
+
+// 堆排序完整逻辑
+void heapSort(vector<BoundingBox>& arr) {
+    int n = arr.size();
+    if (n <= 1) return; // 边界条件：无需排序
+
+    // 1. 构建最大堆（从最后一个非叶子节点开始向前堆化）
+    for (int i = n / 2 - 1; i >= 0; i--) {
+        heapify(arr, n, i);
+    }
+
+    // 2. 排序阶段（反复提取堆顶元素到数组末尾）
+    for (int i = n - 1; i > 0; i--) {
+        swap(arr[0], arr[i]); // 堆顶（最大值）移到当前堆末尾
+        heapify(arr, i, 0);   // 缩小堆范围并重新堆化
+    }
+}
+
+// 4. 冒泡排序（相邻元素比较交换，稳定排序）
+void bubbleSort(vector<BoundingBox>& arr) {
+    int n = arr.size();
+    if (n <= 1) return;
+
+    // 外层循环：控制排序轮次（最多n-1轮）
+    for (int i = 0; i < n - 1; i++) {
+        bool isSwapped = false; // 优化标记：无交换则数组已有序
+        // 内层循环：每轮将最大元素"冒泡"到末尾
+        for (int j = 0; j < n - i - 1; j++) {
+            if (arr[j].score < arr[j + 1].score) { // 降序：小的向后移
+                swap(arr[j], arr[j + 1]);
+                isSwapped = true;
+            }
+        }
+        if (!isSwapped) break; // 无交换，提前终止
+    }
+}
+
+// -------------------------- 二、数据生成模块（随机分布+聚集分布） --------------------------
+// 生成随机分布的边界框（均匀分布在640x480图像中）
+vector<BoundingBox> generateRandomBBoxes(int count) {
+    vector<BoundingBox> bboxes;
+    const int imgWidth = 640, imgHeight = 480;  // 图像分辨率
+    const float minSize = 20.0f, maxSize = 100.0f; // 边界框最小/最大尺寸
+
+    for (int i = 0; i < count; i++) {
+        // 1. 随机生成左上角坐标（确保不超出图像，且预留足够空间放边界框）
+        float x1 = rand() % (imgWidth - static_cast<int>(maxSize));
+        float y1 = rand() % (imgHeight - static_cast<int>(maxSize));
+        
+        // 2. 随机生成宽高（连续分布，精度更高）
+        float width = minSize + (rand() / static_cast<float>(RAND_MAX)) * (maxSize - minSize);
+        float height = minSize + (rand() / static_cast<float>(RAND_MAX)) * (maxSize - minSize);
+        
+        // 3. 计算右下角坐标
+        float x2 = x1 + width;
+        float y2 = y1 + height;
+        
+        // 4. 随机生成置信度（0.1~1.0，避免置信度为0的无效框）
+        float score = 0.1f + (rand() / static_cast<float>(RAND_MAX)) * 0.9f;
+        
+        bboxes.emplace_back(x1, y1, x2, y2, score);
+    }
+    return bboxes;
+}
+
+// 生成聚集分布的边界框（集中在图像4个角落）
+vector<BoundingBox> generateClusteredBBoxes(int count) {
+    vector<BoundingBox> bboxes;
+    const int imgWidth = 640, imgHeight = 480;
+    const float minSize = 15.0f, maxSize = 80.0f;
+    // 4个聚集区域的中心点（图像4个角落，距离边缘80像素）
+    vector<pair<float, float>> clusterCenters = {
+        {80.0f, 80.0f},                // 左上角区域
+        {static_cast<float>(imgWidth - 80), 80.0f},  // 右上角区域
+        {80.0f, static_cast<float>(imgHeight - 80)},  // 左下角区域
+        {static_cast<float>(imgWidth - 80), static_cast<float>(imgHeight - 80)} // 右下角区域
+    };
+
+    for (int i = 0; i < count; i++) {
+        // 1. 随机选择一个聚集区域
+        int centerIdx = rand() % 4;
+        float centerX = clusterCenters[centerIdx].first;
+        float centerY = clusterCenters[centerIdx].second;
+        
+        // 2. 在中心点附近生成左上角坐标（±30像素范围，连续分布）
+        float x1 = centerX + (rand() / static_cast<float>(RAND_MAX) - 0.5f) * 60.0f;
+        float y1 = centerY + (rand() / static_cast<float>(RAND_MAX) - 0.5f) * 60.0f;
+        
+        // 3. 裁剪坐标到合法范围（避免超出图像或尺寸不足）
+        x1 = max(0.0f, min(x1, static_cast<float>(imgWidth - static_cast<int>(minSize))));
+        y1 = max(0.0f, min(y1, static_cast<float>(imgHeight - static_cast<int>(minSize))));
+        
+        // 4. 随机生成宽高（连续分布）
+        float width = minSize + (rand() / static_cast<float>(RAND_MAX)) * (maxSize - minSize);
+        float height = minSize + (rand() / static_cast<float>(RAND_MAX)) * (maxSize - minSize);
+        
+        // 5. 计算右下角坐标
+        float x2 = x1 + width;
+        float y2 = y1 + height;
+        
+        // 6. 随机生成置信度（0.1~1.0）
+        float score = 0.1f + (rand() / static_cast<float>(RAND_MAX)) * 0.9f;
+        
+        bboxes.emplace_back(x1, y1, x2, y2, score);
+    }
+    return bboxes;
+}
+
+// -------------------------- 三、基础NMS算法实现 --------------------------
+// 计算两个边界框的交并比（IoU）
+float calculateIoU(const BoundingBox& boxA, const BoundingBox& boxB) {
+    // 1. 计算交集区域的左上角和右下角坐标
+    float interLeft = max(boxA.x1, boxB.x1);
+    float interTop = max(boxA.y1, boxB.y1);
+    float interRight = min(boxA.x2, boxB.x2);
+    float interBottom = min(boxA.y2, boxB.y2);
+
+    // 2. 计算交集面积（若无交集，面积为0）
+    float interArea = max(0.0f, interRight - interLeft) * max(0.0f, interBottom - interTop);
+    if (interArea < 1e-6) return 0.0f; // 浮点精度容错
+
+    // 3. 计算两个框的面积
+    float areaA = (boxA.x2 - boxA.x1) * (boxA.y2 - boxA.y1);
+    float areaB = (boxB.x2 - boxB.x1) * (boxB.y2 - boxB.y1);
+
+    // 4. 计算IoU（交集/并集）
+    float unionArea = areaA + areaB - interArea;
+    return interArea / unionArea;
+}
+
+// 基础NMS算法（输入已按置信度降序排序的边界框）
+void basicNMS(vector<BoundingBox>& bboxes, float iouThreshold = 0.5f) {
+    int n = bboxes.size();
+    if (n <= 1) return; // 无需抑制
+
+    // 遍历每个边界框（从置信度高到低）
+    for (int i = 0; i < n; i++) {
+        if (!bboxes[i].isKeep) continue; // 已被抑制的框跳过
+
+        // 抑制与当前框IoU超过阈值的后续框
+        for (int j = i + 1; j < n; j++) {
+            if (bboxes[j].isKeep) {
+                float iou = calculateIoU(bboxes[i], bboxes[j]);
+                if (iou >= iouThreshold) {
+                    bboxes[j].isKeep = false; // 标记为抑制
+                }
+            }
+        }
+    }
+}
+
+// -------------------------- 四、性能测试模块 --------------------------
+// 测试单个排序算法的运行时间（返回时间：毫秒）
+double testSortPerformance(vector<BoundingBox> bboxes, void (*sortFunc)(vector<BoundingBox>&)) {
+    clock_t start = clock();   // 记录开始时间
+    sortFunc(bboxes);          // 执行排序
+    clock_t end = clock();     // 记录结束时间
+    // 计算时间（毫秒）：(结束-开始) * 1000 / 时钟周期数
+    return 1000.0 * (end - start) / CLOCKS_PER_SEC;
+}
+
+// 测试“排序+NMS”的总运行时间（返回时间：毫秒）
+double testSortNMSPerformance(vector<BoundingBox> bboxes, void (*sortFunc)(vector<BoundingBox>&)) {
+    clock_t start = clock();
+    sortFunc(bboxes);          // 先排序
+    basicNMS(bboxes, 0.5f);    // 再执行NMS
+    clock_t end = clock();
+    return 1000.0 * (end - start) / CLOCKS_PER_SEC;
+}
+
+// 统一测试接口（测试所有算法在指定数据上的性能）
+void runPerformanceTest(int dataSize, const string& dataType) {
+    cout << "\n==================================================" << endl;
+    cout << dataType << " | 数据规模：" << dataSize << "个边界框" << endl;
+    cout << "==================================================" << endl;
+
+    // 1. 生成测试数据（深拷贝避免不同算法间相互影响）
+    vector<BoundingBox> bboxes;
+    if (dataType == "随机分布") {
+        bboxes = generateRandomBBoxes(dataSize);
+    } else {
+        bboxes = generateClusteredBBoxes(dataSize);
+    }
+
+    // 2. 定义排序算法列表（名称+函数指针，统一调用）
+    vector<pair<string, void (*)(vector<BoundingBox>&)>> sortAlgorithms = {
+        {"快速排序", quickSortAdapter},
+        {"归并排序", mergeSortAdapter},
+        {"堆排序", heapSort},
+        {"冒泡排序", bubbleSort}
+    };
+
+    // 3. 测试排序算法单独性能
+    cout << "1. 排序算法单独性能（毫秒）：" << endl;
+    for (auto& [algName, sortFunc] : sortAlgorithms) {
+        vector<BoundingBox> bboxCopy = bboxes; // 深拷贝数据
+        double time = testSortPerformance(bboxCopy, sortFunc);
+        cout << setw(8) << algName << "：" << fixed << setprecision(3) << time << " ms" << endl;
+    }
+
+    // 4. 测试“排序+NMS”总性能
+    cout << "\n2. 排序+NMS总性能（毫秒）：" << endl;
+    for (auto& [algName, sortFunc] : sortAlgorithms) {
+        vector<BoundingBox> bboxCopy = bboxes; // 深拷贝数据
+        double time = testSortNMSPerformance(bboxCopy, sortFunc);
+        cout << setw(8) << algName << "：" << fixed << setprecision(3) << time << " ms" << endl;
+    }
+}
+
+// -------------------------- 主函数（测试入口） --------------------------
+int main() {
+    // 设置随机种子（确保每次运行数据不同）
+    srand(static_cast<unsigned int>(time(0)));
+    cout << "===== 排序算法与NMS性能测试 =====" << endl;
+
+    // 定义测试参数：数据规模（100~10000）、数据分布（随机+聚集）
+    vector<int> testDataSizes = {100, 1000, 5000, 10000};
+    vector<string> testDataTypes = {"随机分布", "聚集分布"};
+
+    // 执行所有测试用例
+    for (const string& dataType : testDataTypes) {
+        for (int dataSize : testDataSizes) {
+            runPerformanceTest(dataSize, dataType);
+        }
+    }
+
+    cout << "\n===== 所有测试完成 =====" << endl;
+    return 0;
+}
