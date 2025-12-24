@@ -1,0 +1,414 @@
+#include <iostream>
+#include <vector>
+#include <queue>
+#include <stack>
+#include <climits>
+#include <algorithm>
+#include <cstring>
+using namespace std;
+
+// 图数据结构（邻接矩阵实现，支持有向/无向、带权/无权）
+class Graph {
+private:
+    int vertexNum;          // 顶点数
+    vector<string> vertices; // 顶点名称（如"A", "B", ...）
+    vector<vector<int>> adjMat; // 邻接矩阵：adjMat[i][j]为顶点i到j的权值，0表示无直接边，INT_MAX/2表示不可达
+    bool isDirected;        // 是否为有向图
+    const int INF = INT_MAX / 2; // 无穷大（修正为INT_MAX/2，避免溢出）
+
+    // 辅助函数：根据顶点名称获取索引
+    int getVertexIndex(const string& name) const {
+        for (int i = 0; i < vertexNum; i++) {
+            if (vertices[i] == name) return i;
+        }
+        return -1; // 未找到
+    }
+
+    // Tarjan算法辅助变量
+    vector<int> disc;     // 发现时间
+    vector<int> low;      // 能到达的最早发现时间的顶点
+    vector<bool> visited; // 是否访问过
+    vector<bool> isArticulation; // 是否为关节点
+    vector<int> parent;   // 父节点
+    int time;             // 时间戳
+    stack<pair<int, int>> edgeStack; // 存储双连通分量的边
+
+    // 递归DFS实现
+    void DFSRecursive(int curr, vector<bool>& visited) const {
+        visited[curr] = true;
+        cout << vertices[curr] << " ";
+        for (int i = 0; i < vertexNum; i++) {
+            if (adjMat[curr][i] != INF && adjMat[curr][i] != 0 && !visited[i]) {
+                DFSRecursive(i, visited);
+            }
+        }
+    }
+
+    // Tarjan算法递归实现（无向图）
+    void TarjanArticulation(int u) {
+        int children = 0; // 子节点数（根节点特殊判断）
+        visited[u] = true;
+        disc[u] = low[u] = ++time;
+
+        // 遍历所有邻接顶点
+        for (int v = 0; v < vertexNum; v++) {
+            if (adjMat[u][v] == INF || adjMat[u][v] == 0) continue; // 无直接边
+            if (!visited[v]) {
+                children++;
+                parent[v] = u;
+                edgeStack.push({u, v}); // 压入当前边
+                TarjanArticulation(v);
+
+                // 更新low[u]：子节点v能到达的最早时间
+                low[u] = min(low[u], low[v]);
+
+                // 情况1：根节点且有至少2个子树（关节点）
+                if (parent[u] == -1 && children > 1) {
+                    isArticulation[u] = true;
+                    // 输出当前双连通分量（边集）
+                    cout << "双连通分量（边集）：";
+                    while (!edgeStack.empty() && edgeStack.top() != make_pair(u, v)) {
+                        cout << vertices[edgeStack.top().first] << "-" << vertices[edgeStack.top().second] << " ";
+                        edgeStack.pop();
+                    }
+                    cout << vertices[u] << "-" << vertices[v] << " ";
+                    edgeStack.pop();
+                    cout << endl;
+                }
+
+                // 情况2：非根节点，子节点v无法通过其他路径到达u的祖先（关节点）
+                if (parent[u] != -1 && low[v] >= disc[u]) {
+                    isArticulation[u] = true;
+                    // 输出当前双连通分量（边集）
+                    cout << "双连通分量（边集）：";
+                    while (!edgeStack.empty() && edgeStack.top() != make_pair(u, v)) {
+                        cout << vertices[edgeStack.top().first] << "-" << vertices[edgeStack.top().second] << " ";
+                        edgeStack.pop();
+                    }
+                    cout << vertices[u] << "-" << vertices[v] << " ";
+                    edgeStack.pop();
+                    cout << endl;
+                }
+            }
+            // 情况3：v是u的父节点以外的已访问顶点（回边），更新low[u]
+            else if (v != parent[u] && disc[v] < disc[u]) { // 避免无向图重复处理边
+                edgeStack.push({u, v});
+                low[u] = min(low[u], disc[v]);
+            }
+        }
+    }
+
+public:
+    // 构造函数：初始化顶点和图类型（默认无向图）
+    Graph(const vector<string>& vs, bool directed = false) 
+        : vertices(vs), isDirected(directed) {
+        vertexNum = vs.size();
+        // 初始化邻接矩阵：默认全为不可达，自身到自身为0
+        adjMat.resize(vertexNum, vector<int>(vertexNum, INF));
+        for (int i = 0; i < vertexNum; i++) {
+            adjMat[i][i] = 0;
+        }
+    }
+
+    // 添加边（u和v为顶点名称，weight为边权）
+    bool addEdge(const string& u, const string& v, int weight = 1) {
+        int uIdx = getVertexIndex(u);
+        int vIdx = getVertexIndex(v);
+        if (uIdx == -1 || vIdx == -1 || weight < 0) return false; // 顶点不存在或权值非法
+        adjMat[uIdx][vIdx] = weight;
+        if (!isDirected) adjMat[vIdx][uIdx] = weight; // 无向图双向赋值
+        return true;
+    }
+
+    // 输出邻接矩阵
+    void printAdjMatrix() const {
+        cout << "图的邻接矩阵（INF表示不可达）：" << endl;
+        // 打印顶点表头
+        cout << "\t";
+        for (const string& v : vertices) {
+            cout << v << "\t";
+        }
+        cout << endl;
+        // 打印每行数据
+        for (int i = 0; i < vertexNum; i++) {
+            cout << vertices[i] << "\t";
+            for (int j = 0; j < vertexNum; j++) {
+                if (adjMat[i][j] == INF) cout << "INF\t";
+                else cout << adjMat[i][j] << "\t";
+            }
+            cout << endl;
+        }
+    }
+
+    // BFS：从起点startName出发遍历，输出遍历顺序
+    void BFS(const string& startName) const {
+        int start = getVertexIndex(startName);
+        if (start == -1) {
+            cout << "起点" << startName << "不存在！" << endl;
+            return;
+        }
+        vector<bool> visited(vertexNum, false);
+        queue<int> q;
+        q.push(start);
+        visited[start] = true;
+        cout << "BFS遍历顺序（从" << startName << "出发）：";
+        while (!q.empty()) {
+            int curr = q.front();
+            q.pop();
+            cout << vertices[curr] << " ";
+            // 遍历所有邻接顶点
+            for (int i = 0; i < vertexNum; i++) {
+                if (adjMat[curr][i] != INF && adjMat[curr][i] != 0 && !visited[i]) {
+                    visited[i] = true;
+                    q.push(i);
+                }
+            }
+        }
+        cout << endl;
+    }
+
+    // DFS（递归版）：从起点startName出发遍历，输出遍历顺序
+    void DFS(const string& startName) const {
+        int start = getVertexIndex(startName);
+        if (start == -1) {
+            cout << "起点" << startName << "不存在！" << endl;
+            return;
+        }
+        vector<bool> visited(vertexNum, false);
+        cout << "DFS遍历顺序（从" << startName << "出发）：";
+        DFSRecursive(start, visited);
+        cout << endl;
+    }
+
+    // Dijkstra算法：从startName出发到所有顶点的最短路径（适合非负权图）
+    void Dijkstra(const string& startName) const {
+        int start = getVertexIndex(startName);
+        if (start == -1) {
+            cout << "起点" << startName << "不存在！" << endl;
+            return;
+        }
+        vector<int> dist(vertexNum, INF); // 起点到各顶点的最短距离
+        vector<bool> visited(vertexNum, false); // 是否已确定最短路径
+        vector<string> path(vertexNum, ""); // 记录路径
+
+        // 初始化：起点到自身距离为0，路径为自身
+        dist[start] = 0;
+        path[start] = startName;
+
+        // 迭代n次（n为顶点数）
+        for (int i = 0; i < vertexNum; i++) {
+            // 找到未访问的距离最小的顶点
+            int minDist = INF;
+            int u = -1;
+            for (int j = 0; j < vertexNum; j++) {
+                if (!visited[j] && dist[j] < minDist) {
+                    minDist = dist[j];
+                    u = j;
+                }
+            }
+            if (u == -1) break; // 剩余顶点不可达
+            visited[u] = true;
+
+            // 松弛操作：更新通过u到达其他顶点的距离
+            for (int v = 0; v < vertexNum; v++) {
+                if (!visited[v] && adjMat[u][v] != INF && dist[u] + adjMat[u][v] < dist[v]) {
+                    dist[v] = dist[u] + adjMat[u][v];
+                    path[v] = path[u] + " -> " + vertices[v];
+                }
+            }
+        }
+
+        // 输出结果
+        cout << "\nDijkstra最短路径（从" << startName << "出发）：" << endl;
+        for (int i = 0; i < vertexNum; i++) {
+            cout << startName << "到" << vertices[i] << "：";
+            if (dist[i] == INF) cout << "不可达";
+            else cout << "距离=" << dist[i] << ", 路径：" << path[i];
+            cout << endl;
+        }
+    }
+
+    // Prim算法：最小支撑树（适合无向连通图）
+    void Prim(const string& startName) const {
+        if (isDirected) {
+            cout << "Prim算法仅适用于无向图！" << endl;
+            return;
+        }
+        int start = getVertexIndex(startName);
+        if (start == -1) {
+            cout << "起点" << startName << "不存在！" << endl;
+            return;
+        }
+        vector<int> key(vertexNum, INF); // 每个顶点到当前生成树的最小权边
+        vector<int> parent(vertexNum, -1); // 记录生成树中顶点的父节点
+        vector<bool> inMST(vertexNum, false); // 是否已加入生成树
+
+        // 初始化：起点的key为0
+        key[start] = 0;
+
+        // 生成树有n个顶点，迭代n次
+        for (int i = 0; i < vertexNum; i++) {
+            // 找到未加入生成树且key最小的顶点
+            int minKey = INF;
+            int u = -1;
+            for (int j = 0; j < vertexNum; j++) {
+                if (!inMST[j] && key[j] < minKey) {
+                    minKey = key[j];
+                    u = j;
+                }
+            }
+            if (u == -1) {
+                cout << "图不连通，无法生成最小支撑树！" << endl;
+                return;
+            }
+            inMST[u] = true;
+
+            // 更新邻接顶点的key值
+            for (int v = 0; v < vertexNum; v++) {
+                if (!inMST[v] && adjMat[u][v] != INF && adjMat[u][v] < key[v]) {
+                    key[v] = adjMat[u][v];
+                    parent[v] = u;
+                }
+            }
+        }
+
+        // 输出最小支撑树
+        cout << "\nPrim最小支撑树（从" << startName << "出发）：" << endl;
+        int totalWeight = 0;
+        for (int i = 0; i < vertexNum; i++) {
+            if (parent[i] != -1) {
+                cout << vertices[parent[i]] << " - " << vertices[i] << "（权值：" << adjMat[parent[i]][i] << "）" << endl;
+                totalWeight += adjMat[parent[i]][i];
+            }
+        }
+        cout << "最小支撑树总权值：" << totalWeight << endl;
+    }
+
+    // 检测无向图的关节点和双连通分量
+    void findArticulationAndBiconnectedComponents() {
+        if (isDirected) {
+            cout << "双连通分量和关节点检测仅适用于无向图！" << endl;
+            return;
+        }
+
+        // 每次调用重置所有辅助变量（关键修正）
+        disc.clear(); low.clear(); visited.clear();
+        isArticulation.clear(); parent.clear();
+        while (!edgeStack.empty()) edgeStack.pop(); // 清空边栈
+        disc.resize(vertexNum, -1);
+        low.resize(vertexNum, -1);
+        visited.resize(vertexNum, false);
+        isArticulation.resize(vertexNum, false);
+        parent.resize(vertexNum, -1);
+        time = 0;
+
+        // 处理非连通图（遍历所有未访问顶点）
+        cout << "\n双连通分量与关节点检测结果：" << endl;
+        for (int i = 0; i < vertexNum; i++) {
+            if (!visited[i]) {
+                TarjanArticulation(i);
+                // 输出剩余的边（最后一个双连通分量）
+                if (!edgeStack.empty()) {
+                    cout << "双连通分量（边集）：";
+                    while (!edgeStack.empty()) {
+                        cout << vertices[edgeStack.top().first] << "-" << vertices[edgeStack.top().second] << " ";
+                        edgeStack.pop();
+                    }
+                    cout << endl;
+                }
+            }
+        }
+
+        // 输出关节点
+        cout << "关节点（割点）：";
+        bool hasArticulation = false;
+        for (int i = 0; i < vertexNum; i++) {
+            if (isArticulation[i]) {
+                cout << vertices[i] << " ";
+                hasArticulation = true;
+            }
+        }
+        if (!hasArticulation) cout << "无";
+        cout << endl;
+    }
+};
+
+// -------------------------- 测试主函数 --------------------------
+int main() {
+    // -------------------------- 图1：按作业描述构建（修正边权） --------------------------
+    cout << "===================== 图1 相关操作 =====================" << endl;
+    vector<string> vertices1 = {"A", "B", "C", "D", "E", "F", "G", "H"};
+    Graph graph1(vertices1, false); // 无向图
+
+    // 按题目中的边权添加边（严格匹配文档标注）
+    graph1.addEdge("A", "B", 4);
+    graph1.addEdge("A", "C", 2);
+    graph1.addEdge("B", "D", 7);
+    graph1.addEdge("B", "E", 9);  // 修正为题目中的9
+    graph1.addEdge("C", "D", 6);
+    graph1.addEdge("C", "F", 3);
+    graph1.addEdge("D", "E", 13);
+    graph1.addEdge("D", "G", 2);
+    graph1.addEdge("E", "F", 1);
+    graph1.addEdge("E", "H", 5);
+    graph1.addEdge("F", "H", 10);
+    graph1.addEdge("G", "H", 8);
+    graph1.addEdge("E", "G", 14);
+    graph1.addEdge("F", "D", 11);
+
+    // (1) 输出图1的邻接矩阵
+    graph1.printAdjMatrix();
+
+    // (2) 图1从A出发的BFS和DFS
+    graph1.BFS("A");
+    graph1.DFS("A");
+
+    // (3) 图1从A出发的最短路径（Dijkstra）和最小支撑树（Prim）
+    graph1.Dijkstra("A");
+    graph1.Prim("A");
+
+    // -------------------------- 图2：按作业描述构建（4x4顶点矩阵） --------------------------
+    cout << "\n\n===================== 图2 相关操作 =====================" << endl;
+    vector<string> vertices2 = {"A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"};
+    Graph graph2(vertices2, false); // 无向图
+
+    // 构建图2的边（4x4网格结构，相邻顶点相连，权值默认1）
+    // 第一行：A-B-C-D
+    graph2.addEdge("A", "B");
+    graph2.addEdge("B", "C");
+    graph2.addEdge("C", "D");
+    // 第二行：E-F-G-H
+    graph2.addEdge("E", "F");
+    graph2.addEdge("F", "G");
+    graph2.addEdge("G", "H");
+    // 第三行：I-J-K-L
+    graph2.addEdge("I", "J");
+    graph2.addEdge("J", "K");
+    graph2.addEdge("K", "L");
+    // 列方向连接
+    graph2.addEdge("A", "E");
+    graph2.addEdge("E", "I");
+    graph2.addEdge("B", "F");
+    graph2.addEdge("F", "J");
+    graph2.addEdge("C", "G");
+    graph2.addEdge("G", "K");
+    graph2.addEdge("D", "H");
+    graph2.addEdge("H", "L");
+    // 增加部分对角线边，使图存在双连通分量
+    graph2.addEdge("A", "F");
+    graph2.addEdge("B", "E");
+    graph2.addEdge("F", "K");
+    graph2.addEdge("G", "J");
+
+    // (4) 图2选取不同起点检测双连通分量和关节点（结果一致）
+    cout << "=== 图2 以A为起点检测 ===" << endl;
+    graph2.findArticulationAndBiconnectedComponents();
+
+    cout << "=== 图2 以F为起点检测 ===" << endl;
+    graph2.findArticulationAndBiconnectedComponents();
+
+    cout << "=== 图2 以L为起点检测 ===" << endl;
+    graph2.findArticulationAndBiconnectedComponents();
+
+    return 0;
+}
