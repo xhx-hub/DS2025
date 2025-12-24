@@ -5,27 +5,48 @@
 #include <vector>
 #include <queue>
 #include <algorithm>
+#include <stdexcept>
+#include <string>
 using namespace std;
 
-// 补充文档中定义的Rank类型
 typedef size_t Rank;
 
-// 位图类（严格按文档实现）
+// 位图类（修复后）
 class Bitmap {
 private:
     unsigned char* M;
+    static const unsigned char BIT_MASK = 0x80;
+    static const unsigned char BIT_OFFSET_MASK = 0x07;
 protected:
-    Rank N, _sz; // 位图空间M[], N*sizeof(char)*8个比特中含_sz个有效位
+    Rank N, _sz;
     void init(Rank n);
 public:
     Bitmap(Rank n = 8) { init(n); }
     Bitmap(char* file, Rank n = 8) {
         init(n);
         FILE* fp = fopen(file, "r");
+        if (!fp) {
+            cerr << "文件打开失败：" << file << endl;
+            exit(1);
+        }
         fread(M, sizeof(char), N, fp);
         fclose(fp);
-        for (Rank k = 0, _sz = 0; k < n; k++)
+        _sz = 0;
+        for (Rank k = 0; k < n; k++)
             _sz += test(k);
+    }
+    Bitmap(const Bitmap& other) {
+        init(other.N);
+        memcpy(M, other.M, N);
+        _sz = other._sz;
+    }
+    Bitmap& operator=(const Bitmap& other) {
+        if (this == &other) return *this;
+        delete[] M;
+        init(other.N);
+        memcpy(M, other.M, N);
+        _sz = other._sz;
+        return *this;
     }
     ~Bitmap() { delete[] M; M = NULL; _sz = 0; }
     Rank size() { return _sz; }
@@ -34,12 +55,16 @@ public:
     bool test(Rank k);
     void dump(char* file);
     char* bits2string(Rank n);
-private:
-    void expand(Rank k);
+    void expand(Rank k); // 改为public，供HuffCode调用
 };
 
 void Bitmap::init(Rank n) {
-    M = new unsigned char[N = (n + 7) / 8];
+    try {
+        M = new unsigned char[N = (n + 7) / 8];
+    } catch (bad_alloc& e) {
+        cerr << "内存分配失败：" << e.what() << endl;
+        exit(1);
+    }
     memset(M, 0, N);
     _sz = 0;
 }
@@ -48,30 +73,38 @@ void Bitmap::expand(Rank k) {
     if (k < 8 * N) return;
     Rank oldN = N;
     unsigned char* oldM = M;
-    init(2 * k); // 按文档要求的加倍策略
-    memcpy_s(M, N, oldM, oldN);
+    init(2 * k);
+    memcpy(M, oldM, oldN);
     delete[] oldM;
 }
 
 void Bitmap::set(Rank k) {
     expand(k);
-    _sz++;
-    M[k >> 3] |= (0x80 >> (k & 0x07));
+    if (!test(k)) { // 避免重复计数
+        M[k >> 3] |= (BIT_MASK >> (k & BIT_OFFSET_MASK));
+        _sz++;
+    }
 }
 
 void Bitmap::clear(Rank k) {
     expand(k);
-    _sz--;
-    M[k >> 3] &= ~(0x80 >> (k & 0x07));
+    if (test(k)) {
+        M[k >> 3] &= ~(BIT_MASK >> (k & BIT_OFFSET_MASK));
+        _sz--;
+    }
 }
 
 bool Bitmap::test(Rank k) {
     expand(k);
-    return M[k >> 3] & (0x80 >> (k & 0x07));
+    return M[k >> 3] & (BIT_MASK >> (k & BIT_OFFSET_MASK));
 }
 
 void Bitmap::dump(char* file) {
     FILE* fp = fopen(file, "w");
+    if (!fp) {
+        cerr << "文件写入失败：" << file << endl;
+        exit(1);
+    }
     fwrite(M, sizeof(char), N, fp);
     fclose(fp);
 }
@@ -101,7 +134,7 @@ public:
     bool isLeaf() const { return left == nullptr && right == nullptr; }
 };
 
-// 二叉树类（BinTree）
+// 二叉树类
 template <typename T>
 class BinTree {
 protected:
@@ -110,7 +143,7 @@ protected:
 
 public:
     BinTree() : root(nullptr), _size(0) {}
-    ~BinTree() { clear(); }
+    virtual ~BinTree() { clear(); }
 
     size_t size() const { return _size; }
     bool empty() const { return _size == 0; }
@@ -140,7 +173,7 @@ struct HuffNodeData {
     HuffNodeData(char c = '\0', int f = 0) : ch(c), frequency(f) {}
 };
 
-// Huffman树类（基于BinTree）
+// Huffman树类
 class HuffTree : public BinTree<HuffNodeData> {
 public:
     HuffTree(char chs[], int freqs[], int n) {
@@ -149,7 +182,6 @@ public:
         };
         priority_queue<BinNode<HuffNodeData>*, vector<BinNode<HuffNodeData>*>, decltype(cmp)> minHeap(cmp);
 
-        // 创建叶子节点
         for (int i = 0; i < n; i++) {
             if (freqs[i] > 0) {
                 BinNode<HuffNodeData>* leaf = new BinNode<HuffNodeData>(HuffNodeData(chs[i], freqs[i]));
@@ -158,7 +190,6 @@ public:
             }
         }
 
-        // 构建Huffman树
         while (minHeap.size() > 1) {
             BinNode<HuffNodeData>* left = minHeap.top(); minHeap.pop();
             BinNode<HuffNodeData>* right = minHeap.top(); minHeap.pop();
@@ -174,23 +205,45 @@ public:
             _size++;
         }
 
-        root = minHeap.empty() ? nullptr : minHeap.top();
+        if (minHeap.empty()) {
+            root = nullptr;
+            _size = 0;
+        } else {
+            root = minHeap.top();
+        }
     }
 };
 
-// Huffman编码类（基于Bitmap）
+// HuffCode类（修复深拷贝）
 class HuffCode {
 private:
     Bitmap bits;
     size_t length;
 public:
     HuffCode() : length(0) {}
+    HuffCode(const HuffCode& other) : bits(other.bits), length(other.length) {}
+    HuffCode& operator=(const HuffCode& other) {
+        if (this == &other) return *this;
+        bits = other.bits;
+        length = other.length;
+        return *this;
+    }
     ~HuffCode() {}
 
     void appendBit(bool isOne) {
-        if (isOne) bits.set(length);
-        else bits.clear(length);
+        bits.expand(length);
+        if (isOne) {
+            bits.set(length);
+        } else {
+            if (bits.test(length)) bits.clear(length);
+        }
         length++;
+    }
+
+    void popBack() {
+        if (length == 0) return;
+        length--;
+        if (bits.test(length)) bits.clear(length);
     }
 
     char* toString() {
@@ -198,13 +251,6 @@ public:
     }
 
     size_t getLength() const { return length; }
-
-    // 用于回溯的清除位操作
-    void clearBit(size_t k) {
-        if (k < length) {
-            bits.clear(k);
-        }
-    }
 };
 
 // Huffman编码器
@@ -212,38 +258,34 @@ class HuffEncoder {
 private:
     HuffCode codeTable[26];
     HuffTree* huffTree;
+    const string SPEECH_TEXT = R"(
+I have a dream that one day this nation will rise up and live out the true meaning of its creed 
+We hold these truths to be self-evident that all men are created equal 
+I have a dream that one day on the red hills of Georgia the sons of former slaves and the sons of former slave owners will be able to sit down together at the table of brotherhood 
+I have a dream that one day even the state of Mississippi a state sweltering with the heat of injustice sweltering with the heat of oppression will be transformed into an oasis of freedom and justice 
+I have a dream that my four little children will one day live in a nation where they will not be judged by the color of their skin but by the content of their character 
+I have a dream today 
+I have a dream that one day down in Alabama with its vicious racists with its governor having his lips dripping with the words of interposition and nullification one day right there in Alabama little black boys and black girls will be able to join hands with little white boys and white girls as sisters and brothers 
+I have a dream today 
+I have a dream that one day every valley shall be exalted and every hill and mountain shall be made low the rough places will be made plain and the crooked places will be made straight and the glory of the Lord shall be revealed and all flesh shall see it together
+)";
 
 public:
     HuffEncoder() {
-        // 《I have a dream》演讲原文
-        const char* speech = "I have a dream that one day this nation will rise up and live out the true meaning of its creed "
-                            "We hold these truths to be self-evident that all men are created equal "
-                            "I have a dream that one day on the red hills of Georgia the sons of former slaves and the sons of former slave owners will be able to sit down together at the table of brotherhood "
-                            "I have a dream that one day even the state of Mississippi a state sweltering with the heat of injustice sweltering with the heat of oppression will be transformed into an oasis of freedom and justice "
-                            "I have a dream that my four little children will one day live in a nation where they will not be judged by the color of their skin but by the content of their character "
-                            "I have a dream today "
-                            "I have a dream that one day down in Alabama with its vicious racists with its governor having his lips dripping with the words of interposition and nullification one day right there in Alabama little black boys and black girls will be able to join hands with little white boys and white girls as sisters and brothers "
-                            "I have a dream today "
-                            "I have a dream that one day every valley shall be exalted and every hill and mountain shall be made low the rough places will be made plain and the crooked places will be made straight and the glory of the Lord shall be revealed and all flesh shall see it together";
-
         int freqs[26] = {0};
         char chs[26];
         for (int i = 0; i < 26; i++) {
             chs[i] = 'a' + i;
         }
 
-        // 统计26个字母频率（不分大小写）
-        for (const char* p = speech; *p != '\0'; p++) {
-            if (isalpha(*p)) {
-                char c = tolower(*p);
-                freqs[c - 'a']++;
+        for (char c : SPEECH_TEXT) {
+            if (isalpha(c)) {
+                freqs[tolower(c) - 'a']++;
             }
         }
 
-        // 构建Huffman树
         huffTree = new HuffTree(chs, freqs, 26);
 
-        // 构建编码表
         HuffCode emptyCode;
         buildCodeTable(huffTree->getRoot(), emptyCode);
     }
@@ -252,7 +294,6 @@ public:
         delete huffTree;
     }
 
-    // 单词编码
     HuffCode encodeWord(const char* word) {
         HuffCode result;
         for (const char* p = word; *p != '\0'; p++) {
@@ -270,7 +311,6 @@ public:
         return result;
     }
 
-    // 打印编码表
     void printCodeTable() {
         cout << "Huffman编码表（a-z）：" << endl;
         for (int i = 0; i < 26; i++) {
@@ -282,11 +322,9 @@ public:
     }
 
 private:
-    // 递归构建编码表
     void buildCodeTable(BinNode<HuffNodeData>* node, HuffCode currentCode) {
         if (node == nullptr) return;
 
-        // 叶子节点：记录编码
         if (node->isLeaf()) {
             char c = node->data.ch;
             if (isalpha(c)) {
@@ -296,36 +334,35 @@ private:
             return;
         }
 
-        // 左子树：追加0
         currentCode.appendBit(false);
         buildCodeTable(node->left, currentCode);
-        currentCode.clearBit(currentCode.getLength() - 1);
+        currentCode.popBack();
 
-        // 右子树：追加1
         currentCode.appendBit(true);
         buildCodeTable(node->right, currentCode);
-        currentCode.clearBit(currentCode.getLength() - 1);
+        currentCode.popBack();
     }
 };
 
 // 测试主函数
 int main() {
-    HuffEncoder encoder;
+    try {
+        HuffEncoder encoder;
+        encoder.printCodeTable();
 
-    // 打印编码表
-    encoder.printCodeTable();
+        const char* testWords[] = {"dream", "freedom", "justice", "equality", "brotherhood", "nation", "hope"};
+        int wordCount = sizeof(testWords) / sizeof(testWords[0]);
 
-    // 测试编码单词
-    const char* testWords[] = {"dream", "freedom", "justice", "equality", "brotherhood", "nation", "hope"};
-    int wordCount = sizeof(testWords) / sizeof(testWords[0]);
-
-    cout << "\n测试单词编码结果：" << endl;
-    for (int i = 0; i < wordCount; i++) {
-        HuffCode code = encoder.encodeWord(testWords[i]);
-        char* codeStr = code.toString();
-        cout << testWords[i] << " : " << codeStr << " (长度：" << code.getLength() << "比特)" << endl;
-        delete[] codeStr;
+        cout << "\n测试单词编码结果：" << endl;
+        for (int i = 0; i < wordCount; i++) {
+            HuffCode code = encoder.encodeWord(testWords[i]);
+            char* codeStr = code.toString();
+            cout << testWords[i] << " : " << codeStr << " (长度：" << code.getLength() << "比特)" << endl;
+            delete[] codeStr;
+        }
+    } catch (exception& e) {
+        cerr << "运行错误：" << e.what() << endl;
+        return 1;
     }
-
     return 0;
 }
